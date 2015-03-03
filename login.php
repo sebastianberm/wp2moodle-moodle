@@ -13,8 +13,6 @@
  *			Added option to enrol user into multiple cohorts or groups by specifying comma-separated list of identifiers
 **/
 
-// error_reporting(E_ALL);
-// ini_set('display_errors', '1');
 
 global $CFG, $USER, $SESSION, $DB;
 
@@ -22,6 +20,7 @@ require('../../config.php');
 require_once($CFG->libdir.'/moodlelib.php');
 require_once($CFG->dirroot.'/cohort/lib.php');
 require_once($CFG->dirroot.'/group/lib.php');
+require_once($CFG->dirroot."/lib/enrollib.php");
 
 // logon may somehow modify this
 $SESSION->wantsurl = $CFG->wwwroot.'/';
@@ -101,6 +100,7 @@ if (!empty($_GET)) {
 		$idnumber = get_key_value($userdata, "idnumber"); // the users id in the wordpress database, stored here for possible user-matching
 		$cohort = get_key_value($userdata, "cohort"); // the cohort to map the user user; these can be set as enrolment options on one or more courses, if it doesn't exist then skip this step
 		$group = get_key_value($userdata, "group");
+                $course = get_key_value($userdata, "course");
 		$updatefields = (get_key_value($userdata, "updatable") != "false");	// if true or not set, update fields like email, username, etc.
 		
 		// mdl_user.idnumber is the wordpress wp_users.id
@@ -237,9 +237,53 @@ if (!empty($_GET)) {
 				}
 			}
 		}	
+
+		// also optionally find a courseid we sent in, enrol this user in that course
+		if (!empty($course))
+		{
+			// find in table roles, record with shortname = student
+			$studentrow = $DB->get_record('role', array('shortname'=>'student'));
+			$ids 		= explode(',', $course);
+
+			foreach ($ids as $course)
+			{
+				$courserow = new stdClass();
+
+				// find course based upon idnumber
+				if(intval(trim($course)) == $course)
+				{
+					$courserow = $DB->get_record('course', array('id'=>intval($course)));
+				}
+				elseif(!$courserow && $DB->record_exists('course', array('shortname'=>$course)))
+				{
+					// find course based upon shortname
+					$courserow = $DB->get_record('course', array('shortname'=>$course));
+				}
+
+				if(empty($courserow))   
+				{
+					continue;
+				}
+
+				// enrol student to course
+				if(get_config('auth/wp2moodle', 'redirectnoenrol') == 'no')
+				{
+					if(!enrol_try_internal_enrol($courserow->id, $user->id, $studentrow->id))
+					{
+						continue;
+					}
+				}
+
+				// if the plugin auto-opens the course, then find the course this group is for and set it as the opener link
+				if (get_config('auth/wp2moodle', 'autoopen') == 'yes')
+				{
+					$SESSION->wantsurl = new moodle_url('/course/view.php', array('id'=>$courserow->id));
+				}
+			}
+		}
 		
 		// all that's left to do is to authenticate this user and set up their active session
-	    $authplugin = get_auth_plugin('wp2moodle'); // me!
+		$authplugin = get_auth_plugin('wp2moodle'); // me!
 		if ($authplugin->user_login($user->username, $user->password)) {
 			$user->loggedin = true;
 			$user->site     = $CFG->wwwroot;
